@@ -202,6 +202,30 @@ SuperTooltip(
 
 <img src="https://github.com/bensonarafat/super_tooltip/blob/master/screenshots/screenshot3.gif?raw=true" width="250"/>
 
+### useRootOverlay - Mounting Behavior
+
+Choose whether the tooltip is inserted into the root overlay or stays inside
+the current widget tree:
+
+```dart
+SuperTooltip(
+  useRootOverlay: false,
+  barrierConfig: const BarrierConfiguration(
+    show: true,
+    showBlur: true,
+  ),
+  content: const Text(
+    "This tooltip stays in the current page hierarchy.",
+    style: TextStyle(color: Colors.white),
+  ),
+  child: const Icon(Icons.layers),
+)
+```
+
+`useRootOverlay: false` keeps the bubble, barrier, and blur inside the current
+widget subtree instead of the app-wide root overlay. In this mode, the visual
+coverage is limited by the surrounding layout.
+
 ### InteractionConfiguration - User Interaction
 
 Control how users interact with the tooltip:
@@ -462,7 +486,7 @@ Allow touches to pass through specific areas:
 ```dart
 SuperTooltip(
   controller: _controller,
-  touchThroughArea: Rect.fromLTWH(100, 100, 200, 100),
+  touchThroughAreaBuilder: (childArea) => childArea.inflate(8),
   touchThroughAreaShape: ClipAreaShape.rectangle,
   touchThroughAreaCornerRadius: 10.0,
   barrierConfig: const BarrierConfiguration(show: true),
