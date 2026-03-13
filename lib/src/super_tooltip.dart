@@ -40,6 +40,7 @@ class SuperTooltip extends StatefulWidget {
     Key? key,
     required this.content,
     this.controller,
+    this.useRootOverlay = true,
     this.child,
     this.style = const TooltipStyle(),
     this.arrowConfig = const ArrowConfiguration(),
@@ -70,6 +71,12 @@ class SuperTooltip extends StatefulWidget {
 
   /// Controller to manage the tooltip's visibility and state.
   final SuperTooltipController? controller;
+
+  /// Whether to insert tooltip entries into the root [Overlay].
+  ///
+  /// When true, the tooltip is shown in the app's root overlay instead of the
+  /// nearest local overlay.
+  final bool useRootOverlay;
 
   /// The target widget to which the tooltip is attached.
   final Widget? child;
@@ -144,6 +151,7 @@ class SuperTooltip extends StatefulWidget {
 class _SuperTooltipState extends State<SuperTooltip>
     with SingleTickerProviderStateMixin {
   final LayerLink _layerLink = LayerLink();
+  final OverlayPortalController _portalController = OverlayPortalController();
   late AnimationController _animationController;
   late SuperTooltipController _controller;
   bool _ownsController = false;
@@ -151,8 +159,6 @@ class _SuperTooltipState extends State<SuperTooltip>
   OverlayEntry? _tooltipEntry;
   OverlayEntry? _barrierEntry;
   OverlayEntry? _blurEntry;
-
-  TooltipDirection _resolvedDirection = TooltipDirection.down;
 
   Timer? _showTimer;
   Timer? _hideTimer;
@@ -248,7 +254,7 @@ class _SuperTooltipState extends State<SuperTooltip>
   @override
   void dispose() {
     _cancelAllTimers();
-    _removeAllOverlayEntries();
+    _removeAllTooltipPresentations();
     _controller.removeListener(_onControllerChanged);
     if (_ownsController) {
       _controller.dispose();
@@ -263,7 +269,7 @@ class _SuperTooltipState extends State<SuperTooltip>
     _showDurationTimer?.cancel();
   }
 
-  void _removeAllOverlayEntries() {
+  void _removeAllTooltipPresentations() {
     if (_tooltipEntry != null) {
       _removeEntries();
     }
@@ -271,7 +277,7 @@ class _SuperTooltipState extends State<SuperTooltip>
 
   @override
   Widget build(BuildContext context) {
-    return MouseRegion(
+    final anchoredChild = MouseRegion(
       cursor: widget.mouseCursor ?? SystemMouseCursors.basic,
       hitTestBehavior: HitTestBehavior.translucent,
       onEnter: _handleMouseEnter,
@@ -284,6 +290,16 @@ class _SuperTooltipState extends State<SuperTooltip>
           child: widget.child,
         ),
       ),
+    );
+
+    if (widget.useRootOverlay) {
+      return anchoredChild;
+    }
+
+    return OverlayPortal(
+      controller: _portalController,
+      overlayChildBuilder: _buildPortalOverlayChild,
+      child: anchoredChild,
     );
   }
 
@@ -335,10 +351,18 @@ class _SuperTooltipState extends State<SuperTooltip>
   Future<void> _showTooltip() async {
     widget.onShow?.call();
 
-    if (_tooltipEntry != null) return;
+    if (widget.useRootOverlay) {
+      if (_tooltipEntry != null) return;
+    } else if (_portalController.isShowing) {
+      return;
+    }
 
     _showTimer?.cancel();
-    _createOverlayEntries();
+    if (widget.useRootOverlay) {
+      _createOverlayEntries();
+    } else {
+      _portalController.show();
+    }
 
     await _animationController.forward().whenComplete(_controller.complete);
 
@@ -357,32 +381,23 @@ class _SuperTooltipState extends State<SuperTooltip>
     _showDurationTimer?.cancel();
 
     await _animationController.reverse().whenComplete(_controller.complete);
-    _removeEntries();
+    if (widget.useRootOverlay) {
+      _removeEntries();
+    } else if (_portalController.isShowing) {
+      _portalController.hide();
+    }
   }
 
   void _createOverlayEntries() {
-    final overlayState = Overlay.of(context);
-    final renderBox = context.findRenderObject() as RenderBox;
-    final overlay = overlayState.context.findRenderObject() as RenderBox?;
-
-    final size = renderBox.size;
-    final target = renderBox.localToGlobal(size.center(Offset.zero));
-
-    final animation = CurvedAnimation(
-      parent: _animationController,
-      curve: Curves.fastOutSlowIn,
+    final overlayState = Overlay.of(context, rootOverlay: true);
+    final presentationData = _computePresentationData(
+      context,
+      rootOverlay: true,
     );
-
-    final offsetToTarget = Offset(
-      -target.dx + size.width / 2,
-      -target.dy + size.height / 2,
-    );
-
-    final backgroundColor =
-        widget.style.backgroundColor ?? Theme.of(context).cardColor;
-
-    final positionData = _calculatePosition(target, overlay);
-    _resolvedDirection = positionData.direction;
+    if (presentationData == null) {
+      return;
+    }
+    final animation = _buildTooltipAnimation();
 
     _barrierEntry = _shouldShowBarrier ? _createBarrierEntry(animation) : null;
 
@@ -392,11 +407,7 @@ class _SuperTooltipState extends State<SuperTooltip>
 
     _tooltipEntry = _createTooltipEntry(
       animation: animation,
-      offsetToTarget: offsetToTarget,
-      target: target,
-      backgroundColor: backgroundColor,
-      overlay: overlay,
-      positionData: positionData,
+      presentationData: presentationData,
     );
 
     overlayState.insertAll([
@@ -407,92 +418,181 @@ class _SuperTooltipState extends State<SuperTooltip>
   }
 
   OverlayEntry _createBarrierEntry(Animation<double> animation) {
-    return OverlayEntry(
-      builder: (context) => FadeTransition(
-        opacity: animation,
-        child: GestureDetector(
-          onTap: widget.interactionConfig.hideOnBarrierTap
-              ? _controller.hideTooltip
-              : null,
-          onVerticalDragUpdate: widget.interactionConfig.hideOnScroll
-              ? (_) => _controller.hideTooltip()
-              : null,
-          onHorizontalDragUpdate: widget.interactionConfig.hideOnScroll
-              ? (_) => _controller.hideTooltip()
-              : null,
-          child: Container(
-            key: SuperTooltip.barrierKey,
-            decoration: ShapeDecoration(
-              shape: ShapeOverlay(
-                clipAreaCornerRadius: widget.touchThroughAreaCornerRadius,
-                clipAreaShape: widget.touchThroughAreaShape,
-                clipRect: widget.touchThroughArea,
-                barrierColor: _effectiveBarrierColor,
-                overlayDimensions: widget.overlayDimensions,
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
+    return OverlayEntry(builder: (context) => _buildBarrierLayer(animation));
   }
 
   OverlayEntry _createBlurEntry(Animation<double> animation) {
-    return OverlayEntry(
-      builder: (context) => FadeTransition(
-        opacity: animation,
-        child: BackdropFilter(
-          filter: ImageFilter.blur(
-            sigmaX: widget.barrierConfig.sigmaX,
-            sigmaY: widget.barrierConfig.sigmaY,
-          ),
-          child: Container(width: double.infinity, height: double.infinity),
-        ),
-      ),
-    );
+    return OverlayEntry(builder: (context) => _buildBlurLayer(animation));
   }
 
   OverlayEntry _createTooltipEntry({
     required Animation<double> animation,
-    required Offset offsetToTarget,
-    required Offset target,
-    required Color backgroundColor,
-    required RenderBox? overlay,
-    required _PositionData positionData,
+    required _OverlayPresentationData presentationData,
   }) {
     return OverlayEntry(
-      builder: (context) => IgnorePointer(
-        ignoring: widget.interactionConfig.clickThrough,
-        child: FadeTransition(
-          opacity: animation,
-          child: Center(
-            child: CompositedTransformFollower(
-              link: _layerLink,
-              showWhenUnlinked: false,
-              offset: offsetToTarget,
-              child: CustomSingleChildLayout(
-                delegate: SuperToolTipPositionDelegate(
-                  preferredDirection: positionData.direction,
-                  constraints: positionData.constraints,
-                  top: positionData.top,
-                  bottom: positionData.bottom,
-                  left: positionData.left,
-                  right: positionData.right,
-                  target: target,
-                  overlay: overlay,
-                  margin: widget.positionConfig.minimumOutsideMargin,
-                  snapsFarAwayHorizontally:
-                      widget.positionConfig.snapsFarAwayHorizontally,
-                  snapsFarAwayVertically:
-                      widget.positionConfig.snapsFarAwayVertically,
-                ),
-                child: Stack(
-                  fit: StackFit.passthrough,
-                  children: [
-                    _buildTooltipBubble(target, backgroundColor, positionData),
-                    _buildCloseButton(),
-                  ],
-                ),
+      builder: (context) =>
+          _buildTooltipLayer(animation: animation, data: presentationData),
+    );
+  }
+
+  Animation<double> _buildTooltipAnimation() {
+    return CurvedAnimation(
+      parent: _animationController,
+      curve: Curves.fastOutSlowIn,
+    );
+  }
+
+  Widget _buildPortalOverlayChild(BuildContext context) {
+    final presentationData = _computePresentationData(
+      context,
+      rootOverlay: false,
+    );
+    if (presentationData == null) {
+      return const SizedBox.shrink();
+    }
+
+    final animation = _buildTooltipAnimation();
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        if (widget.barrierConfig.showBlur) _buildBlurLayer(animation),
+        if (_shouldShowBarrier) _buildBarrierLayer(animation),
+        _buildTooltipLayer(animation: animation, data: presentationData),
+      ],
+    );
+  }
+
+  _OverlayPresentationData? _computePresentationData(
+    BuildContext overlayContext, {
+    required bool rootOverlay,
+  }) {
+    final renderBox = context.findRenderObject() as RenderBox?;
+    if (renderBox == null || !renderBox.hasSize) {
+      return null;
+    }
+
+    final overlayState = Overlay.of(overlayContext, rootOverlay: rootOverlay);
+    final overlay = overlayState.context.findRenderObject() as RenderBox?;
+    final size = renderBox.size;
+    final centerTarget = renderBox.localToGlobal(size.center(Offset.zero));
+    final backgroundColor =
+        widget.style.backgroundColor ?? Theme.of(context).cardColor;
+    final initialPositionData = _calculatePosition(centerTarget, overlay);
+    var anchorDirection = initialPositionData.direction;
+    var anchorOffset = SuperUtils.tooltipAnchorPoint(
+      childSize: size,
+      direction: anchorDirection,
+    );
+    var target = renderBox.localToGlobal(anchorOffset);
+    var positionData = _calculatePosition(target, overlay);
+
+    if (positionData.direction != anchorDirection) {
+      anchorDirection = positionData.direction;
+      anchorOffset = SuperUtils.tooltipAnchorPoint(
+        childSize: size,
+        direction: anchorDirection,
+      );
+      target = renderBox.localToGlobal(anchorOffset);
+      positionData = _calculatePosition(target, overlay);
+    }
+
+    final offsetToTarget = Offset(
+      -target.dx + anchorOffset.dx,
+      -target.dy + anchorOffset.dy,
+    );
+
+    return _OverlayPresentationData(
+      target: target,
+      offsetToTarget: offsetToTarget,
+      backgroundColor: backgroundColor,
+      overlay: overlay,
+      positionData: positionData,
+    );
+  }
+
+  Widget _buildBarrierLayer(Animation<double> animation) {
+    return FadeTransition(
+      opacity: animation,
+      child: GestureDetector(
+        onTap: widget.interactionConfig.hideOnBarrierTap
+            ? _controller.hideTooltip
+            : null,
+        onVerticalDragUpdate: widget.interactionConfig.hideOnScroll
+            ? (_) => _controller.hideTooltip()
+            : null,
+        onHorizontalDragUpdate: widget.interactionConfig.hideOnScroll
+            ? (_) => _controller.hideTooltip()
+            : null,
+        child: Container(
+          key: SuperTooltip.barrierKey,
+          decoration: ShapeDecoration(
+            shape: ShapeOverlay(
+              clipAreaCornerRadius: widget.touchThroughAreaCornerRadius,
+              clipAreaShape: widget.touchThroughAreaShape,
+              clipRect: widget.touchThroughArea,
+              barrierColor: _effectiveBarrierColor,
+              overlayDimensions: widget.overlayDimensions,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBlurLayer(Animation<double> animation) {
+    return FadeTransition(
+      opacity: animation,
+      child: BackdropFilter(
+        filter: ImageFilter.blur(
+          sigmaX: widget.barrierConfig.sigmaX,
+          sigmaY: widget.barrierConfig.sigmaY,
+        ),
+        child: Container(width: double.infinity, height: double.infinity),
+      ),
+    );
+  }
+
+  Widget _buildTooltipLayer({
+    required Animation<double> animation,
+    required _OverlayPresentationData data,
+  }) {
+    return IgnorePointer(
+      ignoring: widget.interactionConfig.clickThrough,
+      child: FadeTransition(
+        opacity: animation,
+        child: Center(
+          child: CompositedTransformFollower(
+            link: _layerLink,
+            showWhenUnlinked: false,
+            offset: data.offsetToTarget,
+            child: CustomSingleChildLayout(
+              delegate: SuperToolTipPositionDelegate(
+                preferredDirection: data.positionData.direction,
+                constraints: data.positionData.constraints,
+                top: data.positionData.top,
+                bottom: data.positionData.bottom,
+                left: data.positionData.left,
+                right: data.positionData.right,
+                target: data.target,
+                overlay: data.overlay,
+                margin: widget.positionConfig.minimumOutsideMargin,
+                snapsFarAwayHorizontally:
+                    widget.positionConfig.snapsFarAwayHorizontally,
+                snapsFarAwayVertically:
+                    widget.positionConfig.snapsFarAwayVertically,
+              ),
+              child: Stack(
+                fit: StackFit.passthrough,
+                children: [
+                  _buildTooltipBubble(
+                    target: data.target,
+                    backgroundColor: data.backgroundColor,
+                    positionData: data.positionData,
+                    resolvedDirection: data.positionData.direction,
+                  ),
+                  _buildCloseButton(data.positionData.direction),
+                ],
               ),
             ),
           ),
@@ -501,11 +601,12 @@ class _SuperTooltipState extends State<SuperTooltip>
     );
   }
 
-  Widget _buildTooltipBubble(
-    Offset target,
-    Color backgroundColor,
-    _PositionData positionData,
-  ) {
+  Widget _buildTooltipBubble({
+    required Offset target,
+    required Color backgroundColor,
+    required _PositionData positionData,
+    required TooltipDirection resolvedDirection,
+  }) {
     return Material(
       color: Colors.transparent,
       child: GestureDetector(
@@ -525,7 +626,7 @@ class _SuperTooltipState extends State<SuperTooltip>
             arrowLength: widget.arrowConfig.length,
             arrowTipDistance: widget.arrowConfig.tipDistance,
             closeButtonSize: _effectiveCloseButtonSize,
-            preferredDirection: _resolvedDirection,
+            preferredDirection: resolvedDirection,
             closeButtonType: widget.closeButtonConfig.type,
             showCloseButton: widget.closeButtonConfig.show,
           ),
@@ -536,18 +637,24 @@ class _SuperTooltipState extends State<SuperTooltip>
           ),
           decoration:
               widget.decorationBuilder?.call(target) ??
-              _buildDefaultDecoration(backgroundColor, target, positionData),
+              _buildDefaultDecoration(
+                backgroundColor: backgroundColor,
+                target: target,
+                positionData: positionData,
+                resolvedDirection: resolvedDirection,
+              ),
           child: widget.content,
         ),
       ),
     );
   }
 
-  Decoration _buildDefaultDecoration(
-    Color backgroundColor,
-    Offset target,
-    _PositionData positionData,
-  ) {
+  Decoration _buildDefaultDecoration({
+    required Color backgroundColor,
+    required Offset target,
+    required _PositionData positionData,
+    required TooltipDirection resolvedDirection,
+  }) {
     return ShapeDecoration(
       gradient: widget.style.gradient,
       color: widget.style.gradient == null ? backgroundColor : null,
@@ -571,7 +678,7 @@ class _SuperTooltipState extends State<SuperTooltip>
         borderWidth: widget.style.borderWidth,
         bottom: positionData.bottom,
         left: positionData.left,
-        preferredDirection: _resolvedDirection,
+        preferredDirection: resolvedDirection,
         right: positionData.right,
         target: target,
         top: positionData.top,
@@ -580,12 +687,12 @@ class _SuperTooltipState extends State<SuperTooltip>
     );
   }
 
-  Widget _buildCloseButton() {
+  Widget _buildCloseButton(TooltipDirection resolvedDirection) {
     if (!widget.closeButtonConfig.show) {
       return const SizedBox.shrink();
     }
 
-    final buttonPosition = _calculateCloseButtonPosition();
+    final buttonPosition = _calculateCloseButtonPosition(resolvedDirection);
 
     return Positioned(
       right: buttonPosition.right,
@@ -607,10 +714,12 @@ class _SuperTooltipState extends State<SuperTooltip>
     );
   }
 
-  ({double right, double top}) _calculateCloseButtonPosition() {
+  ({double right, double top}) _calculateCloseButtonPosition(
+    TooltipDirection resolvedDirection,
+  ) {
     final isInside = widget.closeButtonConfig.type == CloseButtonType.inside;
 
-    switch (_resolvedDirection) {
+    switch (resolvedDirection) {
       case TooltipDirection.left:
         return (
           right:
@@ -787,6 +896,22 @@ class _SuperTooltipState extends State<SuperTooltip>
     _blurEntry?.remove();
     _blurEntry = null;
   }
+}
+
+class _OverlayPresentationData {
+  const _OverlayPresentationData({
+    required this.target,
+    required this.offsetToTarget,
+    required this.backgroundColor,
+    required this.overlay,
+    required this.positionData,
+  });
+
+  final Offset target;
+  final Offset offsetToTarget;
+  final Color backgroundColor;
+  final RenderBox? overlay;
+  final _PositionData positionData;
 }
 
 /// Internal class to hold position calculation results

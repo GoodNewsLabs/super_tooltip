@@ -238,6 +238,31 @@ SuperTooltip(
 )
 ```
 
+### Overlay Selection
+
+Control which `Overlay` receives the tooltip entries:
+
+```dart
+SuperTooltip(
+  useRootOverlay: true, // default: insert into the app's root Overlay
+  content: const Text(
+    'I use the global overlay by default.',
+    style: TextStyle(color: Colors.white),
+  ),
+  child: const Icon(Icons.layers),
+)
+```
+
+- `useRootOverlay: true` - Insert into the root/global `Overlay` and keep the tooltip above subsequently presented routes
+- `useRootOverlay: false` - Insert into the nearest local `Overlay` and follow the local route layering
+- Default is `true`, so existing usages may change layering behavior after upgrading
+
+Use `false` when the tooltip must stay scoped to a nested `Overlay`, such as a
+custom overlay region, embedded navigator, or other locally managed floating
+content. In route-based surfaces like dialogs or bottom sheets, `false` allows
+newly presented routes to naturally cover the tooltip instead of forcing the
+tooltip to the global top layer.
+
 ## 🎯 Common Use Cases
 
 ### Auto-Positioning Tooltip

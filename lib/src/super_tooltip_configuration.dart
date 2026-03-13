@@ -5,10 +5,10 @@ import 'package:super_tooltip/src/enums.dart';
 @immutable
 class ArrowConfiguration {
   const ArrowConfiguration(
-      {this.length = 20.0,
-      this.baseWidth = 20.0,
+      {this.length = 8.0,
+      this.baseWidth = 16.0,
       this.tipRadius = 0.0,
-      this.tipDistance = 2.0});
+      this.tipDistance = 4.0});
 
   final double length;
   final double baseWidth;

@@ -4,6 +4,24 @@ import 'package:flutter/material.dart';
 import 'enums.dart';
 
 class SuperUtils {
+  static Offset tooltipAnchorPoint({
+    required Size childSize,
+    required TooltipDirection direction,
+  }) {
+    switch (direction) {
+      case TooltipDirection.up:
+        return Offset(childSize.width / 2, 0.0);
+      case TooltipDirection.down:
+        return Offset(childSize.width / 2, childSize.height);
+      case TooltipDirection.left:
+        return Offset(0.0, childSize.height / 2);
+      case TooltipDirection.right:
+        return Offset(childSize.width, childSize.height / 2);
+      case TooltipDirection.auto:
+        return childSize.center(Offset.zero);
+    }
+  }
+
   static EdgeInsets getTooltipMargin({
     required CloseButtonType? closeButtonType,
     required double? closeButtonSize,
@@ -15,8 +33,8 @@ class SuperUtils {
     final top = !showCloseButton
         ? 0.0
         : (closeButtonType == CloseButtonType.outside)
-            ? closeButtonSize! + 12
-            : 0.0;
+        ? closeButtonSize! + 12
+        : 0.0;
 
     switch (preferredDirection) {
       case TooltipDirection.down:
@@ -24,7 +42,9 @@ class SuperUtils {
 
       case TooltipDirection.up:
         return EdgeInsets.only(
-            bottom: arrowTipDistance + arrowLength, top: top);
+          bottom: arrowTipDistance + arrowLength,
+          top: top,
+        );
 
       case TooltipDirection.left:
         return EdgeInsets.only(right: arrowTipDistance + arrowLength, top: top);
@@ -45,8 +65,8 @@ class SuperUtils {
     final top = !showCloseButton
         ? 0.0
         : (closeButtonType == CloseButtonType.inside)
-            ? closeButtonSize!
-            : 0.0;
+        ? closeButtonSize!
+        : 0.0;
     return EdgeInsets.only(top: top);
   }
 
