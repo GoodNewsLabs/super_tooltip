@@ -15,6 +15,7 @@ import 'super_tooltip_style.dart';
 import 'utils.dart';
 
 typedef DecorationBuilder = Decoration Function(Offset target);
+typedef TouchThroughAreaBuilder = Rect? Function(Rect area);
 
 /// A powerful and customizable tooltip widget for Flutter.
 ///
@@ -56,7 +57,7 @@ class SuperTooltip extends StatefulWidget {
       maxWidth: double.infinity,
     ),
     this.decorationBuilder,
-    this.touchThroughArea,
+    this.touchThroughAreaBuilder,
     this.touchThroughAreaShape = ClipAreaShape.oval,
     this.touchThroughAreaCornerRadius = 5.0,
     this.overlayDimensions = const EdgeInsets.all(10),
@@ -108,8 +109,9 @@ class SuperTooltip extends StatefulWidget {
   /// Custom decoration builder for advanced styling.
   final DecorationBuilder? decorationBuilder;
 
-  /// Rectangular area that allows touch events to pass through the barrier.
-  final Rect? touchThroughArea;
+  /// Builder that receives the target child's global rect and returns the
+  /// touch-through area for the barrier.
+  final TouchThroughAreaBuilder? touchThroughAreaBuilder;
 
   /// Shape of the touch-through area.
   final ClipAreaShape touchThroughAreaShape;
@@ -399,7 +401,9 @@ class _SuperTooltipState extends State<SuperTooltip>
     }
     final animation = _buildTooltipAnimation();
 
-    _barrierEntry = _shouldShowBarrier ? _createBarrierEntry(animation) : null;
+    _barrierEntry = _shouldShowBarrier
+        ? _createBarrierEntry(animation, presentationData.touchThroughArea)
+        : null;
 
     _blurEntry = widget.barrierConfig.showBlur
         ? _createBlurEntry(animation)
@@ -417,8 +421,13 @@ class _SuperTooltipState extends State<SuperTooltip>
     ]);
   }
 
-  OverlayEntry _createBarrierEntry(Animation<double> animation) {
-    return OverlayEntry(builder: (context) => _buildBarrierLayer(animation));
+  OverlayEntry _createBarrierEntry(
+    Animation<double> animation,
+    Rect? clipRect,
+  ) {
+    return OverlayEntry(
+      builder: (context) => _buildBarrierLayer(animation, clipRect),
+    );
   }
 
   OverlayEntry _createBlurEntry(Animation<double> animation) {
@@ -457,7 +466,8 @@ class _SuperTooltipState extends State<SuperTooltip>
       fit: StackFit.expand,
       children: [
         if (widget.barrierConfig.showBlur) _buildBlurLayer(animation),
-        if (_shouldShowBarrier) _buildBarrierLayer(animation),
+        if (_shouldShowBarrier)
+          _buildBarrierLayer(animation, presentationData.touchThroughArea),
         _buildTooltipLayer(animation: animation, data: presentationData),
       ],
     );
@@ -475,9 +485,14 @@ class _SuperTooltipState extends State<SuperTooltip>
     final overlayState = Overlay.of(overlayContext, rootOverlay: rootOverlay);
     final overlay = overlayState.context.findRenderObject() as RenderBox?;
     final size = renderBox.size;
+    final childGlobalRect = _globalRectForRenderBox(renderBox);
     final centerTarget = renderBox.localToGlobal(size.center(Offset.zero));
     final backgroundColor =
         widget.style.backgroundColor ?? Theme.of(context).cardColor;
+    final touchThroughArea = _resolveTouchThroughArea(
+      childGlobalRect: childGlobalRect,
+      overlay: overlay,
+    );
     final initialPositionData = _calculatePosition(centerTarget, overlay);
     var anchorDirection = initialPositionData.direction;
     var anchorOffset = SuperUtils.tooltipAnchorPoint(
@@ -508,10 +523,32 @@ class _SuperTooltipState extends State<SuperTooltip>
       backgroundColor: backgroundColor,
       overlay: overlay,
       positionData: positionData,
+      touchThroughArea: touchThroughArea,
     );
   }
 
-  Widget _buildBarrierLayer(Animation<double> animation) {
+  Rect _globalRectForRenderBox(RenderBox renderBox) {
+    final topLeft = renderBox.localToGlobal(Offset.zero);
+    return topLeft & renderBox.size;
+  }
+
+  Rect? _resolveTouchThroughArea({
+    required Rect childGlobalRect,
+    required RenderBox? overlay,
+  }) {
+    final globalRect = widget.touchThroughAreaBuilder?.call(childGlobalRect);
+    if (globalRect == null) {
+      return null;
+    }
+    if (overlay == null) {
+      return globalRect;
+    }
+
+    final overlayOrigin = overlay.localToGlobal(Offset.zero);
+    return globalRect.shift(-overlayOrigin);
+  }
+
+  Widget _buildBarrierLayer(Animation<double> animation, Rect? clipRect) {
     return FadeTransition(
       opacity: animation,
       child: GestureDetector(
@@ -530,7 +567,7 @@ class _SuperTooltipState extends State<SuperTooltip>
             shape: ShapeOverlay(
               clipAreaCornerRadius: widget.touchThroughAreaCornerRadius,
               clipAreaShape: widget.touchThroughAreaShape,
-              clipRect: widget.touchThroughArea,
+              clipRect: clipRect,
               barrierColor: _effectiveBarrierColor,
               overlayDimensions: widget.overlayDimensions,
             ),
@@ -905,6 +942,7 @@ class _OverlayPresentationData {
     required this.backgroundColor,
     required this.overlay,
     required this.positionData,
+    required this.touchThroughArea,
   });
 
   final Offset target;
@@ -912,6 +950,7 @@ class _OverlayPresentationData {
   final Color backgroundColor;
   final RenderBox? overlay;
   final _PositionData positionData;
+  final Rect? touchThroughArea;
 }
 
 /// Internal class to hold position calculation results

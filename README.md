@@ -482,12 +482,13 @@ SuperTooltip(
 
 ### Touch-Through Areas
 
-Allow touches to pass through specific areas:
+Allow touches to pass through specific areas. The builder receives the target
+child's global rect and returns the final pass-through rect:
 
 ```dart
 SuperTooltip(
   controller: _controller,
-  touchThroughArea: Rect.fromLTWH(100, 100, 200, 100),
+  touchThroughAreaBuilder: (area) => area.inflate(12),
   touchThroughAreaShape: ClipAreaShape.rectangle,
   touchThroughAreaCornerRadius: 10.0,
   barrierConfig: const BarrierConfiguration(show: true),
